@@ -9,16 +9,20 @@ import utils
 
 class ReplayBuffer(object):
     """Buffer to store environment transitions."""
-    def __init__(self, obs_shape, action_shape, capacity, image_pad, device):
+    def __init__(self, obs_shape, action_shape, capacity, image_pad, device, drq=True, low_dim=False):
         self.capacity = capacity
         self.device = device
-
-        self.aug_trans = nn.Sequential(
-            nn.ReplicationPad2d(image_pad),
-            kornia.augmentation.RandomCrop((obs_shape[-1], obs_shape[-1])))
-
-        self.obses = np.empty((capacity, *obs_shape), dtype=np.uint8)
-        self.next_obses = np.empty((capacity, *obs_shape), dtype=np.uint8)
+        self.drq = drq # If true, apply img augmentation
+        self.low_dim = low_dim
+        if not low_dim:
+            self.aug_trans = nn.Sequential(
+                nn.ReplicationPad2d(image_pad),
+                kornia.augmentation.RandomCrop((obs_shape[-1], obs_shape[-1])))
+            obs_type = np.uint8
+        else:
+            obs_type = np.float32
+        self.obses = np.empty((capacity, *obs_shape), dtype=obs_type)
+        self.next_obses = np.empty((capacity, *obs_shape), dtype=obs_type)
         self.actions = np.empty((capacity, *action_shape), dtype=np.float32)
         self.rewards = np.empty((capacity, 1), dtype=np.float32)
         self.not_dones = np.empty((capacity, 1), dtype=np.float32)
@@ -60,11 +64,11 @@ class ReplayBuffer(object):
         rewards = torch.as_tensor(self.rewards[idxs], device=self.device)
         not_dones_no_max = torch.as_tensor(self.not_dones_no_max[idxs],
                                            device=self.device)
-
-        obses = self.aug_trans(obses)
-        next_obses = self.aug_trans(next_obses)
-
-        obses_aug = self.aug_trans(obses_aug)
-        next_obses_aug = self.aug_trans(next_obses_aug)
+        if not self.low_dim and self.drq:
+            # in the original code apply augmentation to both obses and obses_aug?
+            obses = self.aug_trans(obses)
+            next_obses = self.aug_trans(next_obses)
+            obses_aug = self.aug_trans(obses_aug)
+            next_obses_aug = self.aug_trans(next_obses_aug)
 
         return obses, actions, rewards, next_obses, not_dones_no_max, obses_aug, next_obses_aug

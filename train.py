@@ -5,6 +5,7 @@ import pickle as pkl
 import sys
 import time
 
+from manip_envs.tabletop import Tabletop
 import numpy as np
 
 import dmc2gym
@@ -21,7 +22,8 @@ torch.backends.cudnn.benchmark = True
 
 
 def make_env(cfg):
-    """Helper function to create dm_control environment"""
+    """
+    ##  Helper function to create dm_control environment  ## 
     if cfg.env == 'ball_in_cup_catch':
         domain_name = 'ball_in_cup'
         task_name = 'catch'
@@ -44,12 +46,15 @@ def make_env(cfg):
                        width=cfg.image_size,
                        frame_skip=cfg.action_repeat,
                        camera_id=camera_id)
+    """
+    env = Tabletop(low_dim=cfg.low_dim)
+    if not cfg.low_dim:
+        env = utils.FrameStack(env, k=cfg.frame_stack)
+    # env.seed(cfg.seed)
 
-    env = utils.FrameStack(env, k=cfg.frame_stack)
-
-    env.seed(cfg.seed)
-    assert env.action_space.low.min() >= -1
-    assert env.action_space.high.max() <= 1
+    ## ORIGINAL DRQ CODE NORMALIZES ACTIONS TO BE BETWEEN -1.~1.
+    # assert env.action_space.low.min() >= -1
+    # assert env.action_space.high.max() <= 1
 
     return env
 
@@ -82,7 +87,8 @@ class Workspace(object):
         self.replay_buffer = ReplayBuffer(self.env.observation_space.shape,
                                           self.env.action_space.shape,
                                           cfg.replay_buffer_capacity,
-                                          self.cfg.image_pad, self.device)
+                                          self.cfg.image_pad, self.device,
+                                          drq=cfg.drq, low_dim=cfg.low_dim)
 
         self.video_recorder = VideoRecorder(
             self.work_dir if cfg.save_video else None)
@@ -100,12 +106,14 @@ class Workspace(object):
                 with utils.eval_mode(self.agent):
                     action = self.agent.act(obs, sample=False)
                 obs, reward, done, info = self.env.step(action)
-                self.video_recorder.record(self.env)
+                if not self.cfg.low_dim:
+                    self.video_recorder.record(self.env)
                 episode_reward += reward
                 episode_step += 1
 
             average_episode_reward += episode_reward
-            self.video_recorder.save(f'{self.step}.mp4')
+            if not self.cfg.low_dim:
+                self.video_recorder.save(f'{self.step}.mp4')
         average_episode_reward /= self.cfg.num_eval_episodes
         self.logger.log('eval/episode_reward', average_episode_reward,
                         self.step)

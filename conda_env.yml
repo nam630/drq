@@ -6,8 +6,8 @@ dependencies:
   - pytorch
   - cudatoolkit=9.2
   - absl-py
-  - pyparsing
   - jupyterlab
+  - pyparsing
   - scikit-image
   - pip:
     - termcolor
@@ -22,7 +22,6 @@ dependencies:
     - tqdm
     - torchvision
     - yapf
-    - mujoco_py
     - sklearn
     - matplotlib
     - kornia

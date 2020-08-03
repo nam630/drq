@@ -45,7 +45,8 @@ class Encoder(nn.Module):
             conv = torch.relu(self.convs[i](conv))
             self.outputs['conv%s' % (i + 1)] = conv
 
-        h = conv.view(conv.size(0), -1)
+        # h = conv.view(conv.size(0), -1)
+        h = conv.reshape(conv.size(0), -1)
         return h
 
     def forward(self, obs, detach=False):
@@ -80,20 +81,26 @@ class Encoder(nn.Module):
 class Actor(nn.Module):
     """torch.distributions implementation of an diagonal Gaussian policy."""
     def __init__(self, encoder_cfg, action_shape, hidden_dim, hidden_depth,
-                 log_std_bounds):
+                 log_std_bounds, low_dim, obs_dim):
         super().__init__()
 
-        self.encoder = hydra.utils.instantiate(encoder_cfg)
 
         self.log_std_bounds = log_std_bounds
-        self.trunk = utils.mlp(self.encoder.feature_dim, hidden_dim,
+        self.low_dim = low_dim
+        if low_dim:
+            inpt = obs_dim
+        else:
+            self.encoder = hydra.utils.instantiate(encoder_cfg)
+            inpt = self.encoder.feature_dim
+        self.trunk = utils.mlp(inpt, hidden_dim,
                                2 * action_shape[0], hidden_depth)
 
         self.outputs = dict()
         self.apply(utils.weight_init)
 
     def forward(self, obs, detach_encoder=False):
-        obs = self.encoder(obs, detach=detach_encoder)
+        if not self.low_dim:
+            obs = self.encoder(obs, detach=detach_encoder)
 
         mu, log_std = self.trunk(obs).chunk(2, dim=-1)
 
@@ -121,14 +128,18 @@ class Actor(nn.Module):
 
 class Critic(nn.Module):
     """Critic network, employes double Q-learning."""
-    def __init__(self, encoder_cfg, action_shape, hidden_dim, hidden_depth):
+    def __init__(self, encoder_cfg, action_shape, hidden_dim, hidden_depth, low_dim, obs_dim):
         super().__init__()
 
-        self.encoder = hydra.utils.instantiate(encoder_cfg)
-
-        self.Q1 = utils.mlp(self.encoder.feature_dim + action_shape[0],
+        self.low_dim = low_dim
+        if low_dim:
+            inpt = obs_dim
+        else:
+            self.encoder = hydra.utils.instantiate(encoder_cfg)
+            inpt = self.encoder.feature_dim
+        self.Q1 = utils.mlp(inpt + action_shape[0],
                             hidden_dim, 1, hidden_depth)
-        self.Q2 = utils.mlp(self.encoder.feature_dim + action_shape[0],
+        self.Q2 = utils.mlp(inpt + action_shape[0],
                             hidden_dim, 1, hidden_depth)
 
         self.outputs = dict()
@@ -136,7 +147,8 @@ class Critic(nn.Module):
 
     def forward(self, obs, action, detach_encoder=False):
         assert obs.size(0) == action.size(0)
-        obs = self.encoder(obs, detach=detach_encoder)
+        if not self.low_dim: 
+            obs = self.encoder(obs, detach=detach_encoder)
 
         obs_action = torch.cat([obs, action], dim=-1)
         q1 = self.Q1(obs_action)
@@ -148,7 +160,8 @@ class Critic(nn.Module):
         return q1, q2
 
     def log(self, logger, step):
-        self.encoder.log(logger, step)
+        if not self.low_dim:
+            self.encoder.log(logger, step)
 
         for k, v in self.outputs.items():
             logger.log_histogram(f'train_critic/{k}_hist', v, step)
@@ -166,7 +179,7 @@ class DRQAgent(object):
     def __init__(self, obs_shape, action_shape, action_range, device,
                  encoder_cfg, critic_cfg, actor_cfg, discount,
                  init_temperature, lr, actor_update_frequency, critic_tau,
-                 critic_target_update_frequency, batch_size):
+                 critic_target_update_frequency, batch_size, low_dim):
         self.action_range = action_range
         self.device = device
         self.discount = discount
@@ -183,7 +196,8 @@ class DRQAgent(object):
         self.critic_target.load_state_dict(self.critic.state_dict())
 
         # tie conv layers between actor and critic
-        self.actor.encoder.copy_conv_weights_from(self.critic.encoder)
+        if not low_dim:
+            self.actor.encoder.copy_conv_weights_from(self.critic.encoder)
 
         self.log_alpha = torch.tensor(np.log(init_temperature)).to(device)
         self.log_alpha.requires_grad = True
@@ -291,6 +305,8 @@ class DRQAgent(object):
         self.log_alpha_optimizer.step()
 
     def update(self, replay_buffer, logger, step):
+        # if using drq, difference lies in how data is sampled from the replay buffer
+        # if not using drq, obs = obs_aug and next_obs = next_obs_aug
         obs, action, reward, next_obs, not_done, obs_aug, next_obs_aug = replay_buffer.sample(
             self.batch_size)
 
